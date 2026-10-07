@@ -315,6 +315,7 @@ impl Component for PerspectiveViewer {
             PanelClosed(id) => self.on_panel_closed(ctx, id),
             CommitWorkspaceRestore(id) => self.on_commit_workspace_restore(ctx, id),
             DuplicatePanel(id) => self.on_duplicate_panel(ctx, id),
+            DerivePanel(id) => self.on_derive_panel(ctx, id),
             NewPanel(id) => self.on_new_panel(ctx, id),
             NewPanelFrom { client, table } => self.on_new_panel_from(ctx, client, table),
 

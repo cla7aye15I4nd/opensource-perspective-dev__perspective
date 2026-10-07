@@ -13,11 +13,14 @@
 //! The multi-panel model backing a single `<perspective-viewer>`.
 
 use std::cell::{Cell, RefCell};
+use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use perspective_client::Client;
 use perspective_client::config::Filter;
 
+use crate::config::{DerivedTableConfig, TableRef};
+use crate::derived::{DerivedRegistry, DerivedTable};
 use crate::renderer::Renderer;
 use crate::session::{OverlayClause, Session};
 use crate::utils::{EffectLedger, PubSub, Subscription, spawn_owned};
@@ -324,8 +327,16 @@ struct WorkspaceData {
     filters: GlobalFilterSet,
     filters_changed: Rc<PubSub<()>>,
 
+    /// The set of hosted `Table`s changed: a client pushed a hosted-tables
+    /// update (observed post-sweep), or a derived `Table` was registered or
+    /// removed.
+    hosted_tables_changed: Rc<PubSub<()>>,
+
     /// The loaded-clients registry + default designation.
     clients: ClientRegistry,
+
+    /// The live derived `Table`s this workspace owns.
+    derived: DerivedRegistry,
 
     /// Monotonic counter backing [`Workspace::generate_id`].
     next_id: usize,
@@ -372,7 +383,9 @@ impl Workspace {
             active: None,
             filters: GlobalFilterSet::default(),
             filters_changed: Rc::new(PubSub::default()),
+            hosted_tables_changed: Rc::new(PubSub::default()),
             clients: ClientRegistry::default(),
+            derived: DerivedRegistry::default(),
             next_id: 0,
             reservation: Reservation::Idle,
             pending_layout: None,
@@ -503,6 +516,10 @@ impl Workspace {
     /// global filter set).
     pub fn filters_changed(&self) -> Rc<PubSub<()>> {
         self.0.borrow().filters_changed.clone()
+    }
+
+    pub fn hosted_tables_changed(&self) -> Rc<PubSub<()>> {
+        self.0.borrow().hosted_tables_changed.clone()
     }
 
     /// Run `f` against the filter set inside the borrow, then emit
@@ -1036,5 +1053,114 @@ impl Workspace {
             // bound session as-is.
             None => current.is_none().then(|| self.default_client()).flatten(),
         }
+    }
+
+    /// Every derivation's persisted definition, for `saveWorkspace`.
+    pub fn derived_configs(&self) -> BTreeMap<String, DerivedTableConfig> {
+        self.0.borrow().derived.configs()
+    }
+
+    pub fn is_derived(&self, name: &str) -> bool {
+        self.0.borrow().derived.contains(name)
+    }
+
+    pub fn derived_names(&self) -> Vec<String> {
+        self.0.borrow().derived.names()
+    }
+
+    /// The recorded definition of a derived `Table`.
+    pub fn derived_config(&self, name: &str) -> Option<DerivedTableConfig> {
+        self.0.borrow().derived.get(name).map(|x| x.config())
+    }
+
+    /// The name of a live derivation structurally equal to `config`.
+    pub fn derived_find_structural(&self, config: &DerivedTableConfig) -> Option<String> {
+        self.0.borrow().derived.find_structural(config)
+    }
+
+    /// `name`'s definition as a self-contained [`TableRef`], recursively
+    /// inlining each derived ancestor down to a concrete table name.
+    pub fn inline_table_ref(&self, name: &str) -> TableRef {
+        let ancestors = self.derived_ancestors(name);
+        let Some(base) = ancestors.last() else {
+            return TableRef::Name(name.to_owned());
+        };
+
+        let mut out = TableRef::Name(base.clone());
+        let chain = std::iter::once(name)
+            .chain(ancestors[..ancestors.len() - 1].iter().map(String::as_str))
+            .collect::<Vec<_>>();
+
+        for level in chain.into_iter().rev() {
+            match self.derived_config(level) {
+                Some(config) => {
+                    out = TableRef::Derived(Box::new(DerivedTableConfig {
+                        table: out,
+                        view_config: config.view_config,
+                    }));
+                },
+                None => return TableRef::Name(name.to_owned()),
+            }
+        }
+
+        out
+    }
+
+    /// The `Table` names `name` derives from, nearest first.
+    pub fn derived_ancestors(&self, name: &str) -> Vec<String> {
+        self.0.borrow().derived.ancestors(name)
+    }
+
+    /// How many panels and derivations read `name`.
+    pub fn derived_consumers(&self, name: &str) -> usize {
+        let panels = self.panels();
+        let data = self.0.borrow();
+        let bound = panels
+            .iter()
+            .filter(|panel| {
+                panel
+                    .session
+                    .get_table()
+                    .map(|table| table.get_name().to_owned())
+                    .or_else(|| panel.session.pending_table())
+                    .is_some_and(|bound| bound == name)
+            })
+            .count();
+
+        bound + data.derived.children(name).len()
+    }
+
+    pub fn register_derived(&self, name: String, table: DerivedTable) {
+        self.0.borrow_mut().derived.insert(name, table);
+        self.hosted_tables_changed().emit(());
+    }
+
+    /// Take a derivation out of the registry so the caller can await its
+    /// deletion outside the borrow.
+    pub fn take_derived(&self, name: &str) -> Option<DerivedTable> {
+        let derived = self.0.borrow_mut().derived.remove(name);
+        if derived.is_some() {
+            self.hosted_tables_changed().emit(());
+        }
+
+        derived
+    }
+
+    /// Which of `order` may be reused rather than rebuilt.
+    pub fn derived_reusable(
+        &self,
+        order: &[String],
+        configs: &BTreeMap<String, DerivedTableConfig>,
+    ) -> std::collections::BTreeSet<String> {
+        crate::derived::reusable(order, configs, &self.0.borrow().derived)
+    }
+
+    /// The definitions waiting on a parent that is not yet hosted.
+    pub fn derived_pending(&self) -> BTreeMap<String, DerivedTableConfig> {
+        self.0.borrow().derived.pending()
+    }
+
+    pub fn set_derived_pending(&self, pending: BTreeMap<String, DerivedTableConfig>) {
+        self.0.borrow_mut().derived.set_pending(pending);
     }
 }

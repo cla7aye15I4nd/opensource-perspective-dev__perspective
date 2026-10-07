@@ -160,6 +160,18 @@ impl MainPanel {
         x: f64,
         y: f64,
     ) -> bool {
+        // A frame-less right-click (status bar, sidebars) targets the
+        // ACTIVE panel, validated against the workspace so a stale slot
+        // name after an eject falls back to the target-less stage menu.
+        let id = id.or_else(|| {
+            ctx.props().renderer.slot_name().filter(|name| {
+                ctx.props()
+                    .workspace
+                    .panel(&crate::workspace::PanelId::from(name.as_str()))
+                    .is_some()
+            })
+        });
+
         // Make the right-clicked panel active so active-targeting
         // commands (e.g. Reset) act on it; then show the menu.
         if let Some(id) = &id {

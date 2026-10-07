@@ -34,6 +34,7 @@ extern "C" {
 pub type SyncUpdatePanelsResult = (
     Vec<(PanelId, Session, Renderer, ViewerConfigUpdate)>,
     std::vec::Vec<perspective_js::utils::ApiFuture<()>>,
+    Option<std::collections::BTreeMap<String, crate::config::DerivedTableConfig>>,
 );
 
 /// Synchronously apply a `WorkspaceConfigUpdate` to the element's models
@@ -47,6 +48,7 @@ pub fn sync_update_panels(
         active,
         layout,
         panels,
+        derived_tables,
         global_filters,
         masters,
         palette,
@@ -222,5 +224,5 @@ pub fn sync_update_panels(
         OptionalUpdate::Update(filters) => this.workspace.set_global_filters(filters),
     }
 
-    Ok((contents, eject_tasks))
+    Ok((contents, eject_tasks, derived_tables))
 }

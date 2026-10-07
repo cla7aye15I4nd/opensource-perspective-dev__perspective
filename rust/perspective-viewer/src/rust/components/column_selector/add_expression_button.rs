@@ -13,6 +13,7 @@
 use yew::prelude::*;
 
 use super::{ColumnLocator, ColumnSettingsTarget};
+use crate::utils::left_click;
 
 #[derive(Clone, PartialEq, Properties)]
 pub struct AddExpressionButtonProps {
@@ -45,9 +46,10 @@ pub fn AddExpressionButton(p: &AddExpressionButtonProps) -> Html {
         mo.set(false);
     });
 
-    let onmousedown = p
-        .on_open_expr_panel
-        .reform(|_| ColumnSettingsTarget::NewExpression);
+    let onmousedown = left_click(
+        p.on_open_expr_panel
+            .reform(|_| ColumnSettingsTarget::NewExpression),
+    );
 
     let class = if *is_mouseover || matches!(p.selected_column, Some(ColumnLocator::NewExpression))
     {
